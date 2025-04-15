@@ -1,0 +1,245 @@
+-- // Load Fluent UI and Addons
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+-- // Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local camera = workspace.CurrentCamera
+local localPlayer = Players.LocalPlayer
+local userInputService = game:GetService("UserInputService")
+
+-- // Variables
+local aimlockEnabled = false
+local teamCheck = false  -- Team Check added
+local autoAimEnabled = false
+local useFov = true
+local fovLimit = 90
+local fovRadius = 100 -- The radius of the FOV circle that will be drawn
+local selectedPlayerName = nil
+
+-- // FOV Circle Drawing (updated to follow mouse)
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 2
+fovCircle.NumSides = 100
+fovCircle.Filled = false
+fovCircle.Radius = fovRadius
+fovCircle.Visible = false
+fovCircle.Transparency = 1
+fovCircle.Color = Color3.fromRGB(0, 255, 100)
+
+-- // Helpers
+local function getPlayerByName(name)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player.Name == name then
+			return player
+		end
+	end
+	return nil
+end
+
+local function getPlayerNames()
+	local names = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= localPlayer then
+			table.insert(names, player.Name)
+		end
+	end
+	return names
+end
+
+-- Function to check if the player is an enemy based on the TeamCheck toggle
+local function isEnemy(player)
+    if teamCheck then
+        return player.Team ~= localPlayer.Team -- Only return true if the player is on a different team
+    else
+        return true -- If TeamCheck is disabled, target everyone
+    end
+end
+
+local function isWithinFOV(targetPos)
+	if not useFov then return true end
+	local camDirection = camera.CFrame.LookVector
+	local directionToTarget = (targetPos - camera.CFrame.Position).Unit
+	local dot = camDirection:Dot(directionToTarget)
+	local angle = math.deg(math.acos(dot))
+	return angle <= fovLimit
+end
+
+local function isTargetInsideFovCircle(targetPos)
+	-- Check if the target is inside the FOV circle radius (visually on the screen)
+	local screenPosition, onScreen = camera:WorldToViewportPoint(targetPos)
+	if onScreen then
+		local mousePosition = userInputService:GetMouseLocation()
+		local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+		local distance = (Vector2.new(screenPosition.X, screenPosition.Y) - mousePosition).Magnitude
+		return distance <= fovCircle.Radius
+	end
+	return false
+end
+
+local function getClosestPlayer()
+	local closest = nil
+	local shortestDistance = math.huge
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= localPlayer and player.Character and player.Character:FindFirstChild("Head") then
+			local headPos = player.Character.Head.Position
+			
+			-- Only aim at enemies and ensure they're within FOV circle and angle
+			if isEnemy(player) and isTargetInsideFovCircle(headPos) and isWithinFOV(headPos) then
+				local distance = (localPlayer.Character.HumanoidRootPart.Position - headPos).Magnitude
+				if distance < shortestDistance then
+					shortestDistance = distance
+					closest = player
+				end
+			end
+		end
+	end
+
+	return closest
+end
+
+local function aimAt(player)
+	if player and player.Character and player.Character:FindFirstChild("Head") then
+		local headPos = player.Character.Head.Position
+		if isTargetInsideFovCircle(headPos) and isWithinFOV(headPos) then
+			camera.CFrame = CFrame.new(camera.CFrame.Position, headPos)
+		end
+	end
+end
+
+-- // RenderStepped: Aim + FOV circle update
+RunService.RenderStepped:Connect(function()
+	-- 🖱 Track mouse position
+	local mousePosition = userInputService:GetMouseLocation() -- get the mouse position in screen coordinates
+	local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+	
+	-- 🖥 Update FOV circle position to follow the mouse
+	fovCircle.Position = mousePosition
+	fovCircle.Visible = aimlockEnabled and useFov
+	fovCircle.Radius = fovRadius
+
+	-- // Aim logic (only within the FOV circle and angle)
+	if not aimlockEnabled then return end
+
+	local target
+	if autoAimEnabled then
+		target = getClosestPlayer()
+	elseif selectedPlayerName and selectedPlayerName ~= "" then
+		local player = getPlayerByName(selectedPlayerName)
+		if player and player.Character and player.Character:FindFirstChild("Head") then
+			if isTargetInsideFovCircle(player.Character.Head.Position) and isWithinFOV(player.Character.Head.Position) then
+				target = player
+			end
+		end
+	end
+
+	-- // Aim at the target only if inside FOV circle + FOV angle
+	if target then
+		aimAt(target)
+	end
+end)
+
+-- // Fluent UI Setup
+local Window = Fluent:CreateWindow({
+	Title = "I LOVE BEAM 49",
+	SubTitle = "by Real Record",
+	TabWidth = 160,
+	Size = UDim2.fromOffset(580, 460),
+	Acrylic = true,
+	Theme = "Dark",
+	MinimizeKey = Enum.KeyCode.RightControl
+})
+
+local Tabs = {
+	Aim = Window:AddTab({ Title = "Aimlock", Icon = "home" }),
+	Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+Tabs.Aim:AddToggle("AimlockToggle", {
+	Title = "Enable Aimlock",
+	Default = false,
+	Callback = function(state)
+		aimlockEnabled = state
+	end
+})
+
+Tabs.Aim:AddToggle("AutoAimToggle", {
+	Title = "Enable Auto Aim (Closest Player)",
+	Default = false,
+	Callback = function(state)
+		autoAimEnabled = state
+	end
+})
+
+Tabs.Aim:AddToggle("FOVToggle", {
+	Title = "Use FOV Limit",
+	Default = true,
+	Callback = function(state)
+		useFov = state
+	end
+})
+
+Tabs.Aim:AddSlider("FOVSlider", {
+	Title = "FOV Limit (Degrees)",
+	Description = "Only aim at targets within this angle.",
+	Default = 90,
+	Min = 1,
+	Max = 180,
+	Rounding = 0,
+	Callback = function(value)
+		fovLimit = value
+	end
+})
+
+Tabs.Aim:AddSlider("FOVCircleRadius", {
+	Title = "FOV Circle Radius",
+	Description = "Radius of the FOV circle that follows the mouse.",
+	Default = 100,
+	Min = 10,
+	Max = 200,
+	Rounding = 0,
+	Callback = function(value)
+		fovRadius = value
+		fovCircle.Radius = fovRadius
+	end
+})
+
+Tabs.Aim:AddDropdown("PlayerSelector", {
+	Title = "Manual Target Selection",
+	Values = getPlayerNames(),
+	Multi = false,
+	Default = nil,
+	Callback = function(value)
+		selectedPlayerName = value
+	end
+})
+
+-- // Team Check Toggle
+Tabs.Settings:AddToggle("TeamCheckToggle", {
+	Title = "Enable Team Check",
+	Default = false,
+	Callback = function(state)
+		teamCheck = state
+	end
+})
+
+-- // Update dropdown if players join/leave
+local function updateDropdown()
+	local dropdown = Fluent:GetDropdown("PlayerSelector")
+	if dropdown then
+		dropdown:SetValues(getPlayerNames())
+	end
+end
+
+Players.PlayerAdded:Connect(updateDropdown)
+Players.PlayerRemoving:Connect(updateDropdown)
+
+-- // Save/Load Config
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+SaveManager:LoadAutoloadConfig()
